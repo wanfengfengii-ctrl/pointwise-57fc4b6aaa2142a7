@@ -8,7 +8,7 @@ from analysis import freeze
 from intake import IntakeCatalog, accept, pack
 from protocol import RevisionStore, Transition, revise
 from records import connect_archive, get, initialize_archive
-from review import sign
+from review import sign, sign_stagger
 
 
 ZERO = Fraction(0)
@@ -21,6 +21,13 @@ CASES = {
     "dead": ("dead", "direct", ZERO, None),
     "retry": ("delayed_retry", "retry", ONE, Fraction(1, 12)),
     "long": ("long", "direct", ONE, ZERO),
+}
+STAGGER_EXPECTED = {
+    "tie": (ONE, (0, 2), HALF),
+    "closed": (HALF, (0, 2), HALF),
+    "dead": (ZERO, (), None),
+    "retry": (ONE, (2,), Fraction(1, 3)),
+    "long": (ONE, (128,), ONE),
 }
 
 
@@ -96,12 +103,44 @@ def run_case(case):
               f"同拍条件={draft.conditional_sync} 父件={parents}")
 
 
+def run_stagger_case(case):
+    expected_joint, expected_offsets, expected_conditional = STAGGER_EXPECTED[case]
+    with TemporaryDirectory(prefix="stagger-offline-") as temporary:
+        directory = Path(temporary)
+        archive_path = directory / "archive.sqlite"
+        with closing(IntakeCatalog(directory / "intake.sqlite")) as catalog:
+            catalog.initialize()
+            with closing(RevisionStore(directory / "station.sqlite")) as station:
+                station.initialize()
+                parents = issue_pair(station, catalog, case)
+            # 站库与实收库随后关闭，夜班只凭档案办理。
+            with closing(connect_archive(archive_path)) as archive:
+                initialize_archive(archive)
+                signed = sign_stagger(catalog, archive, *parents)
+        with closing(connect_archive(archive_path)) as archive:
+            retrieved = get(archive, signed.report_id)
+        if retrieved != signed:
+            raise AssertionError(f"{case}: 错峰领回结果与签发不符")
+        draft = retrieved.draft
+        actual = (draft.joint_pass, draft.offsets, draft.conditional_sync)
+        if actual != (expected_joint, expected_offsets, expected_conditional):
+            raise AssertionError(f"{case}: 错峰结果不符，实际 {actual}")
+        if (tuple(parent.accepted_id for parent in draft.parents) != parents
+                or retrieved.receipt.accepted_ids != parents):
+            raise AssertionError(f"{case}: 错峰父件顺序不符")
+        print(f"{case} {retrieved.report_id} 共同通过={draft.joint_pass} "
+              f"最优差={draft.offsets} 条件概率={draft.conditional_sync} "
+              f"首执={retrieved.receipt.receipt_id} 父件={parents}")
+
+
 def main():
-    parser = argparse.ArgumentParser(description="用错峰规程样例演示现有同起点签发")
+    parser = argparse.ArgumentParser(description="用错峰规程样例演示同起点与错峰签发")
     parser.add_argument("case", nargs="?", choices=tuple(CASES))
-    case = parser.parse_args().case
-    for name in (case,) if case else CASES:
-        run_case(name)
+    parser.add_argument("--stagger", action="store_true", help="演示错峰签发与断源领取")
+    arguments = parser.parse_args()
+    runner = run_stagger_case if arguments.stagger else run_case
+    for name in (arguments.case,) if arguments.case else CASES:
+        runner(name)
 
 
 if __name__ == "__main__":

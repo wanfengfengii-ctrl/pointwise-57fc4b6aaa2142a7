@@ -64,10 +64,24 @@ with closing(IntakeCatalog('night.sqlite')) as intake:
 - `sign` 接受左、右实收号。缺件或同台架父件抛出 `intake.select.ParentSelectionError`，首达证据无法解释或和摘要矛盾时抛出 `review.sync.UnusableEvidence`。`before_commit` 是可选的无参数调用，位于正文、两父件与首执暂存之后及提交之前。该调用抛出的异常会原样返回，档案事务整体回滚。
 - `sign` 和 `get` 的成果均有 `report_id`、`draft` 与 `receipt`。正文含共同最终通过概率 `joint_pass`、同拍联合质量 `synchronous`、同拍条件值 `conditional_sync` 和有序父件 `parents`。每个父件保留实收号、件号、台架、修订、分析号和摘要。`get` 只读档案库，未签发的编号返回 `None`。
 
+## 错峰签发
+
+`review.sign_stagger(catalog, archive, left_id, right_id, before_commit=None)` 在站库关闭后凭两个不同台架的实收号签发错峰计划。起拍差 `d` 为右台起拍减左台起拍，覆盖正负两侧和零；评分是双方最终都通过时，两台首次通过落在同一绝对拍的条件概率。`review.stagger.stagger_scores` 用吸收链精确求解全部有限候选差，并以次随机链的收缩界一次性证明更远整数差均非最优，无限重试也只做有限次精确计算。
+
+```python
+from review import sign_stagger
+from records import get
+
+signed = sign_stagger(catalog, archive, left_id, right_id)
+retrieved = get(archive, signed.report_id)
+```
+
+错峰成果同样有 `report_id`、`draft`、`receipt`，报告号以 `SG-` 开头，首执以 `RC-SG-` 开头。`draft.joint_pass` 是 `Fraction` 共同通过概率，`draft.offsets` 是升序的全部最优整数差元组（无共同通过资格时为 `()`），`draft.conditional_sync` 是最优条件概率（空计划为 `None`），`draft.parents` 是左右有序的 V1 `ParentReference`。正文、父件与首执在一次档案事务签存，`before_commit` 异常原样传出并整体回滚；选件错误仍是 `intake.select.ParentSelectionError`，证据错误仍是 `review.sync.UnusableEvidence`。关闭实收库后用 `records.get` 按号原样领取（`SG-` 号自动走错峰档案表，`SR-` 号继续走 V1 表），未知号返回 `None`。完整业务口径与样例期望见 `STAGGER.md`。
+
 ## 概率口径
 
 第 1 拍是初态的第一次转移。对继续矩阵 Q 和下一拍直接通过向量 r，第 t 拍首达质量是初态行向量乘 Q 的 t−1 次幂再乘 r。全体有限拍质量的总和是最终通过率，余量涵盖失败终局和永久无法通过的闭环。冻结件用件内索引记录匿名转移系数，站内状态名和逐拍历史留站。交换正文和档案用约分后的分子和正分母的十进制整数文本保存有理数。
 
 两台独立，共同最终通过概率 C 为两台最终通过率之积。同拍质量 S 为每拍两台首达质量乘积之和。只有双方都继续，状态对才进入下一拍。同步域外的零贡献状态不进入方程求解，因而可以精确累计无限重试的尾部。C 大于零时条件值为 S/C，错拍可得到精确的 0。C 为零时条件值为 `None`，报告仍可合法签发。
 
-`tests/test_protocol.py` 核对规程校验、固定修订及单台核定。`tests/test_intake.py` 核对接纳、固定身份和冲突。`tests/test_review.py` 核对断源同步、错拍、闭环、无资格及选件失败。`tests/test_records.py` 核对更正、原始父件顺序、精确领取与事务回滚。
+`tests/test_protocol.py` 核对规程校验、固定修订及单台核定。`tests/test_intake.py` 核对接纳、固定身份和冲突。`tests/test_review.py` 核对断源同步、错拍、闭环、无资格及选件失败。`tests/test_stagger.py` 核对全部整数起拍差的精确比较、全部最优差、断源领取、左右交换、空计划和事务回滚。`tests/test_records.py` 核对更正、原始父件顺序、精确领取与事务回滚。

@@ -3,6 +3,7 @@ import sqlite3
 from records.publish import PublishedReport
 from records.receipt import decode_receipt
 from records.schema import ParentReference, ReportDraft, decode_probability
+from records.stagger_lookup import get_stagger
 
 
 RetrievedReport = PublishedReport
@@ -21,6 +22,8 @@ WHERE receipt.report_number = ?
 
 
 def get(connection: sqlite3.Connection, report_id: str) -> RetrievedReport | None:
+    if isinstance(report_id, str) and report_id.startswith('SG-'):
+        return get_stagger(connection, report_id)
     row = connection.execute(_READ_REPORT, (report_id,)).fetchone()
     if row is None:
         return None

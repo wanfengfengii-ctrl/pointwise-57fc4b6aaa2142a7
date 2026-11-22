@@ -1,3 +1,4 @@
+from collections.abc import Sequence
 from collections import deque
 from fractions import Fraction
 
@@ -36,12 +37,20 @@ def _effective_states(kernel: PassageKernel) -> list[int]:
     return sorted(effective)
 
 
-def eventual_pass_mass(kernel: PassageKernel) -> Fraction:
+def passage_solution(kernel: PassageKernel, rhs: Sequence[Fraction] | None = None) -> dict[int, Fraction]:
+    """Solve (I - Q_eff) x = r over the states that can still reach a pass edge.
+
+    Returns the solution keyed by the kernel's state indices. States outside
+    the effective domain (traps and failure paths) are treated as zero. With
+    the default direct-pass right-hand side the value at ``kernel.initial`` is
+    exactly the eventual passage mass.
+    """
     effective = _effective_states(kernel)
     positions = {state: position for position, state in enumerate(effective)}
-    if kernel.initial not in positions:
-        return Fraction(0)
-
+    if rhs is None:
+        right = [kernel.direct_pass[state] for state in effective]
+    else:
+        right = [Fraction(rhs[state]) for state in effective]
     size = len(effective)
     matrix = []
     for position, state in enumerate(effective):
@@ -52,5 +61,10 @@ def eventual_pass_mass(kernel: PassageKernel) -> Fraction:
                 row[positions[target]] -= weight
         matrix.append(row)
     # Flows leaving the effective domain retain their mass and contribute zero to passage.
-    rhs = [kernel.direct_pass[state] for state in effective]
-    return solve_exact(matrix, rhs)[positions[kernel.initial]]
+    solved = solve_exact(matrix, right)
+    return {state: solved[positions[state]] for state in effective}
+
+
+def eventual_pass_mass(kernel: PassageKernel) -> Fraction:
+    solution = passage_solution(kernel)
+    return solution.get(kernel.initial, Fraction(0))
